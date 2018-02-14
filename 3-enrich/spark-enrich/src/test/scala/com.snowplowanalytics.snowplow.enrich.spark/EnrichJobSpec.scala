@@ -18,33 +18,26 @@ package spark
 
 // Java
 import java.io.{BufferedWriter, File, FileWriter, IOException}
-import com.hadoop.compression.lzo.GPLNativeCodeLoader
-
 // Scala
 import scala.collection.JavaConverters._
 import scala.io.Source
 import scala.util.Random
-
+// Snowplow
+import com.snowplowanalytics.snowplow.CollectorPayload.thrift.model1.CollectorPayload
+// Hadoop
+import com.hadoop.compression.lzo.GPLNativeCodeLoader
 // Commons
 import org.apache.commons.codec.binary.Base64
 import org.apache.commons.io.{FileUtils => FU}
 import org.apache.commons.io.filefilter.TrueFileFilter
-
 // Json4s
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods.{compact, parse}
-
-// Scalaz
-import scalaz._
-import Scalaz._
-
 // Specs2
 import org.specs2.execute.{AsResult, ResultExecution}
 import org.specs2.matcher.{Expectable, Matcher}
 import org.specs2.matcher.Matchers._
 
-// Snowplow
-import CollectorPayload.thrift.model1.CollectorPayload
 
 object EnrichJobSpec {
   /** Case class representing the input lines written in a file. */
@@ -97,7 +90,7 @@ object EnrichJobSpec {
     def apply[S <: String](actual: Expectable[S]) = {
       result((unmatcheable && expected == null) || actual.value == expected,
         "%s (index: %s): %s ".format(field, index, if (unmatcheable) "is unmatcheable" else "%s equals %s".format(actual.description, expected)),
-        "%s (index: %s): %s does not equal %s".format(field, index,  actual.description, expected),
+        "%s (index: %s): %s does not equal %s".format(field, index, actual.description, expected),
         actual)
     }
 
@@ -122,7 +115,7 @@ object EnrichJobSpec {
    * of the supported AsResult typeclasses.
    */
   implicit def unitAsResult: AsResult[Unit] = new AsResult[Unit] {
-    def asResult(r: =>Unit) = ResultExecution.execute(r)(_ => org.specs2.execute.Success())
+    def asResult(r: => Unit) = ResultExecution.execute(r)(_ => org.specs2.execute.Success())
   }
 
   /**
@@ -219,7 +212,7 @@ object EnrichJobSpec {
     val badRowJson = parse(badRow)
     val badRowWithoutTimestamp =
       ("line", (badRowJson \ "line")) ~ (("errors", (badRowJson \ "errors")))
-      compact(badRowWithoutTimestamp)
+    compact(badRowWithoutTimestamp)
   }
 
   /**
@@ -246,8 +239,7 @@ object EnrichJobSpec {
           |}
           |]
         |}
-      |}""".stripMargin.replaceAll("[\n\r]","").getBytes()
-    ))
+      |}""".stripMargin.replaceAll("[\n\r]", "").getBytes()))
   }
 
   /**
@@ -269,8 +261,7 @@ object EnrichJobSpec {
     currencyConversionEnabled: Boolean,
     javascriptScriptEnabled: Boolean,
     apiRequest: Boolean,
-    sqlQuery: Boolean
-  ): String = {
+    sqlQuery: Boolean): String = {
 
     /**
      * Creates the the part of the ip_lookups JSON corresponding to a single lookup
@@ -278,16 +269,16 @@ object EnrichJobSpec {
      * @return JSON fragment containing the lookup's database and URI
      */
     def getLookupJson(lookup: String): String = {
-       """|"%s": {
+      """|"%s": {
             |"database": "%s",
             |"uri": "http://snowplow-hosted-assets.s3.amazonaws.com/third-party/maxmind"
           |}""".format(lookup, lookup match {
-        case "geo"          => "GeoIPCity.dat"
-        case "isp"          => "GeoIPISP.dat"
+        case "geo" => "GeoIPCity.dat"
+        case "isp" => "GeoIPISP.dat"
         case "organization" => "GeoIPOrg.dat"
-        case "domain"       => "GeoIPDomain.dat"
-        case "netspeed"     => "GeoIPNetSpeedCell.dat"
-        })
+        case "domain" => "GeoIPDomain.dat"
+        case "netspeed" => "GeoIPNetSpeedCell.dat"
+      })
     }
 
     /** Converts the JavaScript script to Base64. */
@@ -305,8 +296,7 @@ object EnrichJobSpec {
         |  return [ { schema: "iglu:com.acme/app_id/jsonschema/1-0-0",
         |               data:  { appIdUpper: appIdUpper } } ];
         |}
-        |""".stripMargin.replaceAll("[\n\r]","").getBytes
-      ))
+        |""".stripMargin.replaceAll("[\n\r]", "").getBytes))
     }
 
     val sqlQueryParameters =
@@ -415,7 +405,7 @@ object EnrichJobSpec {
 
     val encoder = new Base64(true) // true means "url safe"
     new String(encoder.encode(
-       s"""|{
+      s"""|{
             |"schema": "iglu:com.snowplowanalytics.snowplow/enrichments/jsonschema/1-0-0",
             |"data": [
               |{
@@ -543,10 +533,51 @@ object EnrichJobSpec {
                   |"enabled": ${sqlQuery},
                   |"parameters": ${sqlQueryParameters}
                 |}
+              |},
+              |{
+                |"schema": "iglu:com.snowplowanalytics.snowplow.enrichments/pii_enrichment_config/jsonschema/2-0-0",
+                |"data": {
+                  |"vendor": "com.snowplowanalytics.snowplow.enrichments",
+                  |"name": "pii_enrichment_config",
+                  |"emitEvent": true,
+                  |"enabled": true,
+                  |"parameters": {
+                    |"pii": [
+                      |{
+                        |"pojo": {
+                          |"field": "user_id"
+                        |}
+                      |},
+                      |{
+                        |"pojo": {
+                          |"field": "user_ipaddress"
+                        |}
+                      |},
+                      |{
+                        |"json": {
+                          |"field": "unstruct_event",
+                          |"schemaCriterion": "iglu:com.mailgun/message_delivered/jsonschema/1-0-*",
+                          |"jsonPath": "$$['recipient']"
+                        |}
+                      |},
+                      |{
+                        |"json": {
+                          |"field": "unstruct_event",
+                          |"schemaCriterion": "iglu:com.mailchimp/subscribe/jsonschema/1-*-*",
+                          |"jsonPath": "$$.data.['email', 'ip_opt']"
+                        |}
+                      |}
+                    |],
+                    |"strategy": {
+                      |"pseudonymize": {
+                        |"hashFunction": "SHA-1"
+                      |}
+                    |}
+                  |}
+                |}
               |}
             |]
-          |}""".stripMargin.replaceAll("[\n\r]","").getBytes
-      ))
+          |}""".stripMargin.replaceAll("[\n\r]", "").getBytes))
   }
 }
 
@@ -569,8 +600,7 @@ trait EnrichJobSpec extends SparkSpec {
     currencyConversionEnabled: Boolean = false,
     javascriptScriptEnabled: Boolean = false,
     apiRequestEnabled: Boolean = false,
-    sqlQueryEnabled: Boolean = false
-  ): Unit = {
+    sqlQueryEnabled: Boolean = false): Unit = {
     val input = mkTmpFile("input", lines)
     runEnrichJob(input.toString(), collector, anonOctets, anonOctetsEnabled, lookups,
       currencyConversionEnabled, javascriptScriptEnabled, apiRequestEnabled, sqlQueryEnabled)
@@ -591,8 +621,7 @@ trait EnrichJobSpec extends SparkSpec {
     currencyConversionEnabled: Boolean,
     javascriptScriptEnabled: Boolean,
     apiRequestEnabled: Boolean,
-    sqlQueryEnabled: Boolean
-  ): Unit = {
+    sqlQueryEnabled: Boolean): Unit = {
     val config = Array(
       "--input-folder", inputFile,
       "--input-format", collector,
@@ -602,8 +631,7 @@ trait EnrichJobSpec extends SparkSpec {
         currencyConversionEnabled, javascriptScriptEnabled, apiRequestEnabled, sqlQueryEnabled),
       "--iglu-config", igluConfig,
       "--etl-timestamp", 1000000000000L.toString,
-      "--local"
-    )
+      "--local")
 
     val job = EnrichJob(spark, config)
     job.run()
@@ -633,8 +661,7 @@ trait EnrichJobSpec extends SparkSpec {
       classOf[org.apache.hadoop.io.LongWritable],
       classOf[ThriftWritable[CollectorPayload]],
       classOf[LzoThriftBlockOutputFormat[ThriftWritable[CollectorPayload]]],
-      hadoopConfig
-    )
+      hadoopConfig)
     f
   }
 
