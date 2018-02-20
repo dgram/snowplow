@@ -17,7 +17,6 @@ package sinks
 
 import scala.collection.JavaConverters._
 import scala.util.Try
-import scala.util.control.NonFatal
 
 import com.google.api.core.{ApiFutureCallback, ApiFutures}
 import com.google.api.gax.batching.BatchingSettings
@@ -27,64 +26,77 @@ import com.google.cloud.pubsub.v1.{Publisher, TopicAdminClient}
 import com.google.pubsub.v1.{ProjectName, PubsubMessage, TopicName}
 import com.google.protobuf.ByteString
 import org.threeten.bp.Duration
+import scalaz._
+import Scalaz._
 
 import model._
+import util._
 
-/**
- * PubSub Sink for the Scala collector
- */
-class PubSubSink(
-  pubSubConfig: PubSub,
-  bufferConfig: BufferConfig,
-  topicName: String
-) extends Sink {
-
-  // maximum size of a pubsub message is 10Mb
-  override val MaxBytes: Long = 10000000L
-
-  private val batchingSettings: BatchingSettings =
-    BatchingSettings.newBuilder()
-      .setElementCountThreshold(bufferConfig.recordLimit)
-      .setRequestByteThreshold(bufferConfig.byteLimit)
-      .setDelayThreshold(Duration.ofMillis(bufferConfig.timeLimit))
-      .build()
-
-  private val retrySettings: RetrySettings =
-    RetrySettings.newBuilder()
-      .setInitialRetryDelay(Duration.ofMillis(pubSubConfig.backoffPolicy.minBackoff))
-      .setMaxRetryDelay(Duration.ofMillis(pubSubConfig.backoffPolicy.maxBackoff))
-      .setRetryDelayMultiplier(pubSubConfig.backoffPolicy.multiplier)
-      .setTotalTimeout(Duration.ofMillis(pubSubConfig.backoffPolicy.totalBackoff))
-      .build()
-
-  private val publisher = createPublisher()
-  require(publisher.isRight, s"Couldn't create publisher ${publisher.left.map(_.getMessage)}")
-  require(topicExists(topicName), s"PubSub topic $topicName doesn't exist")
+/** PubSubSink companion object with factory method */
+object PubSubSink {
+  def createAndInitialize(
+    pubSubConfig: PubSub,
+    bufferConfig: BufferConfig,
+    topicName: String
+  ): \/[Throwable, PubSubSink] = for {
+    batching <- batchingSettings(bufferConfig).right
+    retry = retrySettings(pubSubConfig.backoffPolicy)
+    publisher <- toEither(createPublisher(pubSubConfig.googleProjectId, topicName, batching, retry))
+    topicExists <- topicExists(pubSubConfig.googleProjectId, topicName)
+      .flatMap { b =>
+        if (b) b.right
+        else new IllegalArgumentException(s"PubSub topic $topicName doesn't exist").left
+      }
+  } yield new PubSubSink(publisher, topicName)
 
   /**
    * Instantiates a Publisher on an existing topic with the given configuration options.
    * This can fail if the publisher can't be created.
    * @return a PubSub publisher or an error
    */
-  private def createPublisher(): Either[Throwable, Publisher] =
-    try {
-      val p = Publisher.newBuilder(TopicName.of(pubSubConfig.googleProjectId, topicName))
-        .setBatchingSettings(batchingSettings)
-        .setRetrySettings(retrySettings)
-        .build()
-      Right(p)
-    } catch {
-      case NonFatal(e) => Left(e)
-    }
+  private def createPublisher(
+    projectId: String,
+    topicName: String,
+    batchingSettings: BatchingSettings,
+    retrySettings: RetrySettings
+  ): Try[Publisher] =
+    Try(Publisher.newBuilder(TopicName.of(projectId, topicName))
+      .setBatchingSettings(batchingSettings)
+      .setRetrySettings(retrySettings)
+      .build())
 
-  private def topicExists(topicName: String): Boolean = (for {
-    topicAdminClient <- Try(TopicAdminClient.create()).toOption
-    topics <-
-      Try(topicAdminClient.listTopics(ProjectName.of(pubSubConfig.googleProjectId)))
-        .map(_.iterateAll.asScala.toList)
-        .toOption
+  private def batchingSettings(bufferConfig: BufferConfig): BatchingSettings =
+    BatchingSettings.newBuilder()
+      .setElementCountThreshold(bufferConfig.recordLimit)
+      .setRequestByteThreshold(bufferConfig.byteLimit)
+      .setDelayThreshold(Duration.ofMillis(bufferConfig.timeLimit))
+      .build()
+
+  private def retrySettings(backoffPolicy: BackoffPolicyConfig): RetrySettings =
+    RetrySettings.newBuilder()
+      .setInitialRetryDelay(Duration.ofMillis(backoffPolicy.minBackoff))
+      .setMaxRetryDelay(Duration.ofMillis(backoffPolicy.maxBackoff))
+      .setRetryDelayMultiplier(backoffPolicy.multiplier)
+      .setTotalTimeout(Duration.ofMillis(backoffPolicy.totalBackoff))
+      .build()
+
+  /** Checks that a PubSub topic exists **/
+  private def topicExists(projectId: String, topicName: String): \/[Throwable, Boolean] = for {
+    topicAdminClient <- toEither(Try(TopicAdminClient.create()))
+    topics <- toEither(Try(topicAdminClient.listTopics(ProjectName.of(projectId))))
+      .map(_.iterateAll.asScala.toList)
     exists = topics.map(_.getName).contains(topicName)
-  } yield exists).getOrElse(false)
+    _ <- toEither(Try(topicAdminClient.close()))
+  } yield exists
+}
+
+/**
+ * PubSub Sink for the Scala collector
+ */
+class PubSubSink private (publisher: Publisher, topicName: String) extends Sink {
+
+  // maximum size of a pubsub message is 10Mb
+  override val MaxBytes: Long = 10000000L
 
   /**
    * Convert event bytes to a PubsubMessage to be published
