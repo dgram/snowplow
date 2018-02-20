@@ -41,22 +41,6 @@ object BuildSettings {
     "-target", "1.8"
   )
 
-  // Makes our SBT app settings available from within the app
-  lazy val scalifySettings = Seq(
-    sourceGenerators in Compile += Def.task {
-      val file = (sourceManaged in Compile).value / "settings.scala"
-      IO.write(file, """package com.snowplowanalytics.snowplow.collectors.scalastream.generated
-        |object Settings {
-        |  val organization = "%s"
-        |  val version = "%s"
-        |  val name = "%s"
-        |  val shortName = "ssc"
-        |}
-        |""".stripMargin.format(organization.value, version.value, name.value))
-      Seq(file)
-    }.taskValue
-  )
-
   // sbt-assembly settings for building an executable
   import sbtassembly.AssemblyPlugin.autoImport._
   lazy val sbtAssemblySettings = Seq(
