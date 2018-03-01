@@ -237,7 +237,6 @@ abstract class AbstractSource(
       m <- MaxRecordSize
     } yield AbstractSource.oversizedSuccessToFailure(value, m) -> key
 
-
     val anonymizedSuccesses = smallEnoughSuccesses.map({case (event: String, partition: String, _) => (event, partition)})
     val piiSuccesses = smallEnoughSuccesses.flatMap({case (_, partition: String, pii: Option[String]) => pii.map((_, partition))})
     val successesTriggeredFlush = sink.get.map(_.storeEnrichedEvents(anonymizedSuccesses))
@@ -253,7 +252,6 @@ abstract class AbstractSource(
     } else {
       false
     }
-
   }
 
   /**
